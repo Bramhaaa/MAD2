@@ -58,6 +58,7 @@ import android.widget.FrameLayout;
 import android.widget.HorizontalScrollView;
 import android.widget.ImageButton;
 import android.widget.LinearLayout;
+import android.widget.ListView;
 import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -99,6 +100,8 @@ import androidx.media3.ui.PlayerControlView;
 import androidx.media3.ui.PlayerView;
 import androidx.media3.ui.SubtitleView;
 import androidx.media3.ui.TimeBar;
+import androidx.recyclerview.widget.LinearLayoutManager;
+import androidx.recyclerview.widget.RecyclerView;
 
 import com.brouken.player.dtpv.DoubleTapPlayerView;
 import com.brouken.player.dtpv.youtube.YouTubeOverlay;
@@ -133,6 +136,8 @@ public class PlayerActivity extends Activity {
 
     public Prefs mPrefs;
     public BrightnessControl mBrightnessControl;
+    // Network Link Manager for persistent storage of network video URLs
+    private NetworkLinkManager networkLinkManager;
     public static boolean haveMedia;
     private boolean videoLoading;
     public static boolean controllerVisible;
@@ -2266,24 +2271,66 @@ public class PlayerActivity extends Activity {
         final AlertDialog.Builder builder = new AlertDialog.Builder(PlayerActivity.this);
         builder.setTitle("Import from URL");
         
+        // Create a vertical layout for URL input and title
+        android.widget.LinearLayout layout = new android.widget.LinearLayout(this);
+        layout.setOrientation(android.widget.LinearLayout.VERTICAL);
+        layout.setPadding(50, 40, 50, 10);
+        
         // Create EditText for URL input
-        final EditText editText = new EditText(this);
-        editText.setHint("Enter URL (HTTP/HTTPS)");
-        editText.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
+        final EditText urlEditText = new EditText(this);
+        urlEditText.setHint("Enter URL (HTTP/HTTPS)");
+        urlEditText.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
+        layout.addView(urlEditText);
         
-        builder.setView(editText);
+        // Create EditText for custom title (optional)
+        final EditText titleEditText = new EditText(this);
+        titleEditText.setHint("Custom title (optional)");
+        titleEditText.setInputType(InputType.TYPE_CLASS_TEXT);
+        android.widget.LinearLayout.LayoutParams titleParams = new android.widget.LinearLayout.LayoutParams(
+            android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+            android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+        );
+        titleParams.setMargins(0, 20, 0, 0);
+        titleEditText.setLayoutParams(titleParams);
+        layout.addView(titleEditText);
         
-        builder.setPositiveButton(android.R.string.ok, (dialog, which) -> {
-            String url = editText.getText().toString().trim();
+        builder.setView(layout);
+        
+        builder.setPositiveButton("Add & Play", (dialog, which) -> {
+            String url = urlEditText.getText().toString().trim();
+            String customTitle = titleEditText.getText().toString().trim();
+            
             if (!url.isEmpty()) {
                 if (Utils.isSupportedNetworkUri(Uri.parse(url))) {
+                    // Add to network link manager
+                    getNetworkLinkManager().addLink(url, customTitle);
+                    
                     // Load media from URL
                     Uri urlUri = Uri.parse(url);
                     releasePlayer();
                     mPrefs.updateMedia(this, urlUri, null);
                     initializePlayer();
+                    
+                    Toast.makeText(this, "Added to library and now playing", Toast.LENGTH_SHORT).show();
                 } else {
                     // Show error for unsupported URL
+                    Toast.makeText(this, "Unsupported URL format. Please use HTTP/HTTPS URLs.", Toast.LENGTH_LONG).show();
+                }
+            }
+        });
+        
+        builder.setNeutralButton("Add to Library", (dialog, which) -> {
+            String url = urlEditText.getText().toString().trim();
+            String customTitle = titleEditText.getText().toString().trim();
+            
+            if (!url.isEmpty()) {
+                if (Utils.isSupportedNetworkUri(Uri.parse(url))) {
+                    // Add to network link manager only
+                    NetworkVideoLink link = getNetworkLinkManager().addLink(url, customTitle);
+                    if (link != null) {
+                        Toast.makeText(this, "Added to library: " + link.getDisplayTitle(), Toast.LENGTH_SHORT).show();
+                    }
+                } else {
                     Toast.makeText(this, "Unsupported URL format. Please use HTTP/HTTPS URLs.", Toast.LENGTH_LONG).show();
                 }
             }
@@ -2298,29 +2345,147 @@ public class PlayerActivity extends Activity {
     void showLibraryDialog() {
         final AlertDialog.Builder builder = new AlertDialog.Builder(PlayerActivity.this);
         builder.setTitle("Media Library");
-        builder.setMessage("Choose media source:");
         
-        String[] options = {"Local Files", "Network Stream", "Recent Media"};
+        // Create ListView for library content
+        ListView listView = new ListView(this);
         
-        builder.setItems(options, (dialog, which) -> {
-            switch (which) {
-                case 0: // Local Files
-                    openFile(Utils.getMoviesFolderUri());
-                    break;
-                case 1: // Network Stream
-                    showUrlImportDialog();
-                    break;
-                case 2: // Recent Media
-                    // TODO: Implement recent media functionality
-                    Toast.makeText(this, "Recent media feature coming soon", Toast.LENGTH_SHORT).show();
-                    break;
+        // Prepare library items (combine local files and network links)
+        List<Object> libraryItems = new ArrayList<>();
+        
+        // Add local files section - use app's private library directory for downloaded files
+        LibraryManager libraryManager = new LibraryManager(this);
+        File[] localFiles = libraryManager.getLibraryDirectory().listFiles();
+        if (localFiles != null && localFiles.length > 0) {
+            libraryItems.add("Local Files");
+            for (File file : localFiles) {
+                if (file.isFile()) {
+                    libraryItems.add(file);
+                }
             }
+        }
+        
+        // Add network links section
+        List<NetworkVideoLink> networkLinks = getNetworkLinkManager().getAllLinks();
+        if (!networkLinks.isEmpty()) {
+            libraryItems.add("Network Links");
+            libraryItems.addAll(networkLinks);
+        }
+        
+        // Create and set up the adapter
+        LibraryAdapter adapter = new LibraryAdapter(this, libraryItems,
+            new LibraryAdapter.OnItemClickListener() {
+                @Override
+                public void onLocalFileClick(File file) {
+                    // Handle local file selection
+                    Uri fileUri = Uri.fromFile(file);
+                    mPrefs.updateMedia(PlayerActivity.this, fileUri, null);
+                    initializePlayer();
+                }
+                
+                @Override
+                public void onNetworkLinkClick(NetworkVideoLink link) {
+                    // Handle network link selection
+                    Uri uri = Uri.parse(link.getUrl());
+                    mPrefs.updateMedia(PlayerActivity.this, uri, null);
+                    initializePlayer();
+                }
+                
+                @Override
+                public void onHeaderClick(String headerText) {
+                    // Handle header click if needed
+                }
+            },
+            new LibraryAdapter.OnItemLongClickListener() {
+                @Override
+                public boolean onLocalFileLongClick(File file) {
+                    // Handle local file long click if needed
+                    return false;
+                }
+                
+                @Override
+                public boolean onNetworkLinkLongClick(NetworkVideoLink link) {
+                    // Show options for network link (edit, delete, etc.)
+                    showNetworkLinkOptionsDialog(link);
+                    return true;
+                }
+            });
+        
+        listView.setAdapter(adapter);
+        
+        // Set dialog content
+        builder.setView(listView);
+        
+        // Add action buttons
+        builder.setPositiveButton("Add Network URL", (dialog, which) -> {
+            showUrlImportDialog();
+        });
+        
+        builder.setNeutralButton("Browse Files", (dialog, which) -> {
+            openFile(Utils.getMoviesFolderUri());
         });
         
         builder.setNegativeButton(android.R.string.cancel, (dialog, which) -> {});
         
         final AlertDialog dialog = builder.create();
         dialog.show();
+    }
+    
+    private void showNetworkLinkOptionsDialog(NetworkVideoLink link) {
+        final AlertDialog.Builder builder = new AlertDialog.Builder(this);
+        builder.setTitle(link.getDisplayTitle());
+        
+        String[] options = {"Play", "Edit Title", "Delete", "Copy URL"};
+        
+        builder.setItems(options, (dialog, which) -> {
+            switch (which) {
+                case 0: // Play
+                    Uri uri = Uri.parse(link.getUrl());
+                    mPrefs.updateMedia(this, uri, null);
+                    initializePlayer();
+                    break;
+                case 1: // Edit Title
+                    showEditTitleDialog(link);
+                    break;
+                case 2: // Delete
+                    getNetworkLinkManager().removeLink(link.getUrl());
+                    Toast.makeText(this, "Link removed from library", Toast.LENGTH_SHORT).show();
+                    break;
+                case 3: // Copy URL
+                    android.content.ClipboardManager clipboard = 
+                        (android.content.ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+                    android.content.ClipData clip = android.content.ClipData.newPlainText("Video URL", link.getUrl());
+                    clipboard.setPrimaryClip(clip);
+                    Toast.makeText(this, "URL copied to clipboard", Toast.LENGTH_SHORT).show();
+                    break;
+            }
+        });
+        
+        builder.setNegativeButton(android.R.string.cancel, null);
+        builder.create().show();
+    }
+    
+    private void showEditTitleDialog(NetworkVideoLink link) {
+        final AlertDialog.Builder builder = new AlertDialog.Builder(this);
+        builder.setTitle("Edit Title");
+        
+        final EditText editText = new EditText(this);
+        editText.setText(link.getTitle());
+        editText.setInputType(InputType.TYPE_CLASS_TEXT);
+        editText.setSelectAllOnFocus(true);
+        
+        builder.setView(editText);
+        
+        builder.setPositiveButton(android.R.string.ok, (dialog, which) -> {
+            String newTitle = editText.getText().toString().trim();
+            if (!newTitle.isEmpty()) {
+                link.setTitle(newTitle);
+                getNetworkLinkManager().updateLink(link);
+                Toast.makeText(this, "Title updated", Toast.LENGTH_SHORT).show();
+            }
+        });
+        
+        builder.setNegativeButton(android.R.string.cancel, null);
+        builder.create().show();
     }
 
     private void dispatchPlayPause() {
@@ -2444,4 +2609,14 @@ public class PlayerActivity extends Activity {
             }
         }
     }
+
+    // Network Link Manager for persistent storage of network video URLs
+    public NetworkLinkManager getNetworkLinkManager() {
+        if (networkLinkManager == null) {
+            networkLinkManager = new NetworkLinkManager(this);
+        }
+        return networkLinkManager;
+    }
+
+
 }
