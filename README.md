@@ -1,6 +1,5 @@
 # Pure Play - Android Video Player
 
-[![License](https://img.shields.io/badge/License-Open%20Source-blue.svg)]()
 [![Platform](https://img.shields.io/badge/Platform-Android-green.svg)]()
 [![API Level](https://img.shields.io/badge/API-21%2B-orange.svg)]()
 [![Target SDK](https://img.shields.io/badge/Target%20SDK-35-red.svg)]()
@@ -238,23 +237,6 @@ We welcome contributions! Please follow these guidelines:
 - Add comments for complex logic
 - Ensure backward compatibility
 
-## 📝 License
-
-This project is open source. Please check the license file for specific terms and conditions.
-
-## 🙏 Acknowledgments
-
-- **ExoPlayer Team**: For the robust media playback foundation
-- **FFmpeg Project**: For comprehensive codec support
-- **Android Community**: For continuous feedback and improvements
-- **Contributors**: All developers who have contributed to this project
-
-## 📞 Support
-
-For bug reports, feature requests, or general questions:
-- Create an issue on GitHub
-- Check existing documentation
-- Review recent fixes and improvements
 
 ## 🔮 Roadmap
 
